@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QWidget>
 
+class QPlainTextEdit;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -60,6 +61,7 @@ private:
     QProcess *proc_ = nullptr;
     QTimer *ticker_ = nullptr;
     QElapsedTimer elapsed_;
+    QPlainTextEdit *output_ = nullptr;
     QByteArray partial_;
     cpustress::Run run_state_;
     cpustress::Plan plan_;

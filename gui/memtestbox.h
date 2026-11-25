@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QWidget>
 
+class QPlainTextEdit;
 class QComboBox;
 class QLabel;
 class QProcess;
@@ -48,6 +49,7 @@ private:
     QProcess *proc_ = nullptr;
     QTimer *ticker_ = nullptr;
     QElapsedTimer elapsed_;
+    QPlainTextEdit *output_ = nullptr;
     QByteArray partial_;
     memtest::Run run_state_;
     memtest::Plan plan_;

@@ -1,3 +1,4 @@
+#include <QPlainTextEdit>
 #include "memtestbox.h"
 
 
@@ -139,6 +140,14 @@ MemTestBox::MemTestBox(QWidget *parent) : QWidget(parent) {
     results_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     results_->setMaximumHeight(160);
     root->addWidget(results_);
+    output_ = new QPlainTextEdit;
+    output_->setObjectName("testOutput");
+    output_->setReadOnly(true);
+    output_->setPlaceholderText(tr("Test output"));
+    output_->setMaximumHeight(130);
+    output_->setMaximumBlockCount(500);
+    root->addWidget(output_);
+    root->addStretch();
 
     ticker_ = new QTimer(this);  // only while a test runs
     ticker_->setInterval(1000);
@@ -152,7 +161,10 @@ void MemTestBox::setKernelLog(bool live) {
 }
 
 void MemTestBox::onFault(const QJsonObject &e) {
-    if (proc_ && e.value(QStringLiteral("kind")).toString() == QLatin1String("mce")) ++mce_;
+    if (proc_ && e.value(QStringLiteral("kind")).toString() == QLatin1String("mce")) {
+        ++mce_;
+        output_->appendPlainText(e.value("text").toString());
+    }
 }
 
 void MemTestBox::start() {
@@ -194,22 +206,28 @@ void MemTestBox::launch(const memtest::Plan &p, const QJsonObject &bios) {
     seconds_ = minutes_->currentData().toInt() * 60;
     run_state_ = {};
     partial_.clear();
+    output_->clear();
     mce_ = 0;
     stopped_ = cancelled_ = false;
     proc_ = new QProcess(this);
     proc_->setProcessChannelMode(QProcess::MergedChannels);
     connect(proc_, &QProcess::readyRead, this, [this] {
-        partial_ += proc_->readAll();
+        partial_ += proc_->readAll().replace("\r\n", "\n").replace('\r', '\n');
         qsizetype nl;
         while ((nl = partial_.indexOf('\n')) >= 0) {
-            memtest::feed(run_state_, tool_, QString::fromLocal8Bit(partial_.left(nl)));
+            const auto line = QString::fromLocal8Bit(partial_.left(nl));
+            if (!line.isEmpty()) output_->appendPlainText(line);
+            memtest::feed(run_state_, tool_, line);
             partial_.remove(0, nl + 1);
         }
         if (partial_.size() > 64 * 1024) partial_.clear();  // memtester redraws progress without newlines
     });
     connect(proc_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus st) { finished(code, st == QProcess::CrashExit); });
     connect(proc_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
-        if (e == QProcess::FailedToStart) finished(-1, true);
+        if (e == QProcess::FailedToStart) {
+            output_->appendPlainText(proc_->errorString());
+            finished(-1, true);
+        }
     });
     proc_->start(program_, p.args);
     elapsed_.start();
@@ -240,7 +258,11 @@ void MemTestBox::tick() {
 void MemTestBox::finished(int exitCode, bool crashed) {
     if (!proc_ || settling_) return;
     ticker_->stop();
-    if (!partial_.isEmpty()) memtest::feed(run_state_, tool_, QString::fromLocal8Bit(partial_));
+    if (!partial_.isEmpty()) {
+        const auto line = QString::fromLocal8Bit(partial_);
+        output_->appendPlainText(line);
+        memtest::feed(run_state_, tool_, line);
+    }
     // The machine check that the failure caused is logged after the process is gone: keep counting them a
     // moment (proc_ stays set, so onFault counts), with Start disabled, before the verdict is decided.
     settling_ = true;

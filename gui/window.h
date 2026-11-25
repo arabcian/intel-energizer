@@ -15,18 +15,15 @@
 
 class Window : public QTabWidget {
 public:
-    IntelTab *intel = new IntelTab;
     CpuStressBox *cpu = new CpuStressBox;
     MemTestBox *memory = new MemTestBox;
+    IntelTab *intel = new IntelTab(cpu, memory);
     QProcess *events = new QProcess(this);
     Window() {
-        for (const auto &[page, title] : QList<QPair<QWidget*, QString>>{
-            {intel, tr("Intel Undervolt")}, {cpu, tr("CPU Test")}, {memory, tr("Memory Test")}}) {
-            auto *scroll = new QScrollArea;
-            scroll->setWidgetResizable(true);
-            scroll->setWidget(page);
-            addTab(scroll, title);
-        }
+        auto *scroll = new QScrollArea;
+        scroll->setWidgetResizable(true);
+        scroll->setWidget(intel);
+        addTab(scroll, tr("Intel Undervolt"));
         cpu->setKernelLog(false);
         memory->setKernelLog(false);
         connect(events, &QProcess::readyReadStandardOutput, this, [this] {

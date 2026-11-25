@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QFile>
 #include <QEventLoop>
+#include <QPlainTextEdit>
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
@@ -21,12 +22,15 @@ int main(int argc, char **argv) {
     theme::load();
     Window window;
     window.show();
-    for (int i = 0; i < 3; ++i) {
-        window.setCurrentIndex(i);
+    if (auto *workflow = window.findChild<QTabWidget*>("intelWorkflows")) workflow->setCurrentIndex(1);
+    auto *tests = window.findChild<QTabWidget*>("stabilityTests");
+    if (!tests || tests->count() != 2) return 2;
+    for (int i = 0; i < tests->count(); ++i) {
+        tests->setCurrentIndex(i);
         app.processEvents();
-        if (!window.currentWidget()->isVisible()) return 2;
+        if (!tests->currentWidget()->isVisible()) return 2;
     }
-    if (window.count() != 3 || window.intel->findChildren<QDoubleSpinBox*>().size() < 5) return 3;
+    if (window.count() != 1 || window.intel->findChildren<QDoubleSpinBox*>().size() < 5) return 3;
     if (!window.cpu->findChild<QWidget*>("box_yellow") || !window.memory->findChild<QWidget*>("box_purple")) return 4;
     auto *start = window.memory->findChild<QPushButton*>();
     if (!start) return 7;
@@ -41,5 +45,7 @@ int main(int argc, char **argv) {
     QTimer::singleShot(10000, &loop, &QEventLoop::quit);
     loop.exec();
     const auto history = memtest::load();
+    auto *output = window.memory->findChild<QPlainTextEdit*>("testOutput");
+    if (!output || !output->toPlainText().contains("Status: PASS")) return 10;
     return history.size() == 1 && history.first().toObject()["verdict"] == "pass" ? 0 : 9;
 }

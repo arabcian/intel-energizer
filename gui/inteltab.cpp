@@ -1,3 +1,5 @@
+#include "cpustressbox.h"
+#include "memtestbox.h"
 #include "navigationtargets.h"
 #include "inteltab.h"
 #include "uvtransitions.h"
@@ -91,7 +93,7 @@ static QDoubleSpinBox *dspin(double lo, double hi, double step, int dec, const Q
     return s;
 }
 
-IntelTab::IntelTab(QWidget *parent) : QWidget(parent) {
+IntelTab::IntelTab(CpuStressBox *cpu, MemTestBox *memory, QWidget *parent) : QWidget(parent) {
     QDir().mkpath(inteluv::profilesDir());
     auto *root = new QVBoxLayout(this);
     trial_ = new TrialBar(QStringLiteral("intel/trial"));
@@ -581,7 +583,16 @@ IntelTab::IntelTab(QWidget *parent) : QWidget(parent) {
     lg->addWidget(epp_, r++, 1, 1, 3);
     lg->setColumnStretch(3, 1);
     lg->setRowStretch(r, 1);
-    right->addWidget(lBox);
+    auto *limitsAndTests = new QWidget;
+    auto *limitsColumn = new QVBoxLayout(limitsAndTests);
+    limitsColumn->setContentsMargins(0, 0, 0, 0);
+    limitsColumn->addWidget(lBox);
+    auto *tests = new QTabWidget;
+    tests->setObjectName("stabilityTests");
+    tests->addTab(cpu, cpu->tr("CPU Test"));
+    tests->addTab(memory, memory->tr("Memory Test"));
+    limitsColumn->addWidget(tests);
+    right->addWidget(limitsAndTests);
 
     // ── boot / daemon ──
     auto *dBox = box("Boot, resume && daemon", "box_green");
@@ -686,7 +697,7 @@ IntelTab::IntelTab(QWidget *parent) : QWidget(parent) {
         // Each task gets its own complete workspace. All controls are the
         // original widgets; only their parent layout changes in Studio mode.
         for (QWidget *w : {static_cast<QWidget *>(vBox), static_cast<QWidget *>(xBox),
-                           static_cast<QWidget *>(rBox), static_cast<QWidget *>(lBox),
+                           static_cast<QWidget *>(rBox), limitsAndTests,
                            static_cast<QWidget *>(dBox)}) {
             left->removeWidget(w);
             right->removeWidget(w);
@@ -723,7 +734,7 @@ IntelTab::IntelTab(QWidget *parent) : QWidget(parent) {
             work->addTab(scroll, label);
         };
         makePage(tr("Voltage, safety && startup"), {{vBox, xBox}, {dBox}});
-        makePage(tr("Limits && throttling"), {{lBox, rBox}});
+        makePage(tr("Limits && throttling"), {{limitsAndTests, rBox}});
         root->addWidget(work, 1);
     } else {
         mid->addLayout(left, 1);

@@ -1,3 +1,4 @@
+#include <QPlainTextEdit>
 #include "cpustressbox.h"
 #include "stresscoverage.h"
 
@@ -153,6 +154,14 @@ CpuStressBox::CpuStressBox(QWidget *parent) : QWidget(parent) {
     results_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     results_->setMaximumHeight(160);
     root->addWidget(results_);
+    output_ = new QPlainTextEdit;
+    output_->setObjectName("testOutput");
+    output_->setReadOnly(true);
+    output_->setPlaceholderText(tr("Test output"));
+    output_->setMaximumHeight(130);
+    output_->setMaximumBlockCount(500);
+    root->addWidget(output_);
+    root->addStretch();
 
     ticker_ = new QTimer(this);  // only while a test runs
     ticker_->setInterval(1000);
@@ -220,6 +229,7 @@ void CpuStressBox::setKernelLog(bool live) {
 
 void CpuStressBox::onFault(const QJsonObject &e) {
     if (!proc_ || !cpustress::isCpuFault(e.value(QStringLiteral("kind")).toString())) return;
+    output_->appendPlainText(e.value("text").toString());
     ++faults_;
     const int cpu = cpustress::eventCpu(e.value(QStringLiteral("text")).toString());
     if (cpu >= 0 && !faultCpus_.contains(cpu)) faultCpus_.append(cpu);
@@ -278,24 +288,41 @@ void CpuStressBox::launch() {
     run_state_ = {};
     tempMin_ = 1e9; tempMax_ = -1e9;
     partial_.clear();
+    output_->clear();
     faults_ = 0;
     faultCpus_.clear();
     cancelled_ = false;
     cpustress::store(record(QStringLiteral("running")));  // left behind if the machine goes down
     proc_ = new QProcess(this);
-    proc_->setStandardErrorFile(QProcess::nullDevice());  // diagnostics only; the verdict is on stdout
-    connect(proc_, &QProcess::readyReadStandardOutput, this, [this] {
+    connect(proc_, &QProcess::readyReadStandardError, this, [this] {
+        output_->appendPlainText(QString::fromLocal8Bit(proc_->readAllStandardError()).trimmed());
+    });
+    auto showEvent = [this](const QByteArray &line) {
+        const auto event = QJsonDocument::fromJson(line).object();
+        if (event["ev"] == "error")
+            output_->appendPlainText(tr("CPU %1: incorrect result").arg(event["cpu"].toInt()) + " — " + QString::fromUtf8(line));
+        else if (event["ev"] == "end")
+            output_->appendPlainText(QString::fromUtf8(line));
+    };
+    connect(proc_, &QProcess::readyReadStandardOutput, this, [this, showEvent] {
         partial_ += proc_->readAllStandardOutput();
         qsizetype nl;
         while ((nl = partial_.indexOf('\n')) >= 0) {
+            showEvent(partial_.left(nl));
             if (cpustress::feed(run_state_, QString::fromUtf8(partial_.left(nl)))) cpustress::store(record(QStringLiteral("running")));
             partial_.remove(0, nl + 1);
         }
         if (partial_.size() > 64 * 1024) partial_.clear();  // never a line that long
     });
-    connect(proc_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus st) { finished(code, st == QProcess::CrashExit); });
+    connect(proc_, &QProcess::finished, this, [this, showEvent](int code, QProcess::ExitStatus st) {
+        if (!partial_.isEmpty()) showEvent(partial_);
+        finished(code, st == QProcess::CrashExit);
+    });
     connect(proc_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
-        if (e == QProcess::FailedToStart) finished(-1, true);
+        if (e == QProcess::FailedToStart) {
+            output_->appendPlainText(proc_->errorString());
+            finished(-1, true);
+        }
     });
     proc_->start(program_, plan_.args);
     elapsed_.start();

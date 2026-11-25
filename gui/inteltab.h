@@ -23,10 +23,12 @@ QString profilesDir();  // ~/.config/intel-energizer/intel-uv-profiles
 }
 
 class TrialBar;
+class CpuStressBox;
+class MemTestBox;
 class IntelTab : public QWidget {
     Q_OBJECT
 public:
-    explicit IntelTab(QWidget *parent = nullptr);
+    explicit IntelTab(CpuStressBox *cpu, MemTestBox *memory, QWidget *parent = nullptr);
     ~IntelTab() override;
     bool operationActive() const { return busy_; }
 
