@@ -87,7 +87,8 @@ fn run() -> Value {
         parse_profile(&v).and_then(|p| within_gui_floor(&p).map(|()| p)).map(|p| (v, p)).map_err(|e| json!({"ok": false, "error": format!("invalid profile: {e}")}))
     };
     let hold = obj.get("hold").and_then(Value::as_bool).unwrap_or(false);
-    if matches!(obj.get("op").and_then(Value::as_str), Some("apply" | "reset")) {
+    // Every op that writes voltages or limits: "boot" applies the stored profile, "probe_uv_lock" writes the core offset.
+    if matches!(obj.get("op").and_then(Value::as_str), Some("apply" | "reset" | "boot" | "probe_uv_lock")) {
         if let Some(r) = intel_energizer::refuse_during_calibration() { return r; }
     }
     let mut out = match obj.get("op").and_then(Value::as_str) {
@@ -153,7 +154,13 @@ fn watch_faults() -> std::io::Result<()> {
     if !emit_line(&json!({"ready": true})) { return Ok(()); }
     let mut record = vec![0; 65536];
     loop {
-        let n = log.read(&mut record)?;
+        let n = match log.read(&mut record) {
+            Ok(n) => n,
+            // EPIPE: records were overwritten before this read; the next read continues. Without this a
+            // burst of kernel messages ended the machine-check watch.
+            Err(e) if e.raw_os_error() == Some(libc::EPIPE) || e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
         if n == 0 { return Ok(()); }
         let text = String::from_utf8_lossy(&record[..n]);
         if let Some((_, message)) = text.split_once(';') {

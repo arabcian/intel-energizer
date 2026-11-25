@@ -166,10 +166,12 @@ pub fn mb_status(resp: u64) -> u64 { (resp >> 32) & 0xFF }
 /// Offset in mV from a mailbox response. Only the low 32 bits carry data
 /// (throttled masks them; undervolt.py only strips the plane bits, which is
 /// wrong if the response status byte is non-zero).
-pub fn decode_mv(resp: u64) -> f64 {
+pub fn decode_mv(resp: u64) -> f64 { offset_ticks(resp) as f64 / TICKS_PER_MV }
+
+/// Signed 11-bit offset field (ticks) of a mailbox response.
+pub fn offset_ticks(resp: u64) -> i64 {
     let x = (((resp & 0xFFFF_FFFF) >> 21) & 0x7FF) as i64;
-    let t = if x >= 0x400 { x - 0x800 } else { x };
-    t as f64 / TICKS_PER_MV
+    if x >= 0x400 { x - 0x800 } else { x }
 }
 
 pub fn amps_to_icc_field(a: f64) -> Result<u64, String> {
@@ -404,7 +406,10 @@ impl Msr {
     fn oc_cmd(&self, cmd: u64) -> io::Result<u64> {
         self.wait_idle(MSR_OC_MAILBOX, 1 << 63)?;
         self.write(MSR_OC_MAILBOX, cmd)?;
-        self.wait_idle(MSR_OC_MAILBOX, 1 << 63)
+        // The command is already sent here: a timeout now must not read as "nothing written".
+        self.wait_idle(MSR_OC_MAILBOX, 1 << 63).map_err(|e| if e.kind() == io::ErrorKind::TimedOut {
+            io::Error::new(io::ErrorKind::TimedOut, "mailbox did not complete the command (bit 63 stays set) — result unknown")
+        } else { e })
     }
     /// One OC-mailbox round trip, atomic against every other user of this
     /// lock (GUI helper, daemon, CLI).
@@ -1214,10 +1219,12 @@ fn apply_ex(p: &Profile, rollback: bool) -> Value {
             if !uv_map_verified() { return Err(uv_map_refusal()); }
             if !cpu_planes().any(|p| p.1 == idx) { return Err(format!("domain {idx} does not exist on this CPU — not written")); }
             let ticks = mv_to_ticks_ex(mv, p.allow_positive)?;
-            let (cmd, back) = match msr.mailbox_rmw(uv_read_cmd(idx), |cur| Some(uv_write_cmd_keep(idx, ticks, cur))).map_err(|e| err_str(&e))? {
+            // `prior` is taken before the write: if the mailbox fails after it, the undo still runs.
+            let (cmd, back) = match msr.mailbox_rmw(uv_read_cmd(idx), |cur| { prior = Some(cur); Some(uv_write_cmd_keep(idx, ticks, cur)) })
+                .map_err(|e| err_str(&e))? {
                 Rmw::Absent(st) if ticks == 0 => return Ok(format!("not present on this CPU (status {st:#04x}) — skipped")),
                 Rmw::Absent(st) => return Err(format!("mailbox status {st:#04x} on read: domain not present or refused — nothing written")),
-                Rmw::Done { cur, cmd, back } => { prior = Some(cur); (cmd, back) }
+                Rmw::Done { cmd, back, .. } => (cmd, back),
                 Rmw::Vetoed(_) => unreachable!("voltage write is never vetoed"),
             };
             if mb_status(back) != 0 {
@@ -1564,7 +1571,9 @@ fn apply_ex(p: &Profile, rollback: bool) -> Value {
     let mut rolled = Vec::new();
     for (what, u) in undo.into_iter().rev() {
         let r: Result<String, String> = match u {
-            Undo::Volt(idx, cur) => mv_to_ticks_ex(decode_mv(cur), true).and_then(|t| {
+            // The raw ticks that were read, not mV through the +50 mV cap: a firmware offset above
+            // +50 mV could not be put back otherwise.
+            Undo::Volt(idx, cur) => Ok::<i64, String>(offset_ticks(cur)).and_then(|t| {
                 match msr.mailbox_rmw(uv_read_cmd(idx), |c| Some(uv_write_cmd_keep(idx, t, c))).map_err(|e| err_str(&e))? {
                     Rmw::Done { back, .. } if mb_status(back) == 0 && back & 0xFFFF_FFFF == cur & 0xFFFF_FFFF => Ok(format!("{:.2} mV restored", decode_mv(cur))),
                     Rmw::Done { back, .. } => Err(format!("readback {:.2} mV, wanted {:.2} mV", decode_mv(back), decode_mv(cur))),
@@ -1815,6 +1824,10 @@ mod tests {
             assert_eq!(mv_to_ticks(decode_mv(encode_offset(t))).unwrap(), t);
         }
         assert!(mv_to_ticks(1.0).is_err() && mv_to_ticks(-1000.5).is_err());
+        // Rollback restores raw ticks: +100 mV (above the +50 mV write cap) round-trips.
+        let plus100 = encode_offset((100.0f64 * TICKS_PER_MV).round() as i64);
+        assert_eq!(encode_offset(offset_ticks(plus100)), plus100);
+        assert_eq!(offset_ticks(0xF9A0_0000), mv_to_ticks(-50.0).unwrap());
     }
 
     #[test]

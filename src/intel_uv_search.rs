@@ -153,6 +153,10 @@ fn stress_bin() -> Option<std::path::PathBuf> {
     crate::trusted_path(&path).then_some(path)
 }
 
+/// A stressor killed by a signal (SIGSEGV, SIGILL, SIGBUS … under an unstable offset) has no exit
+/// code: that is a failure, never "cannot run" (which would retry the same offset with SSE).
+fn exit_code(s: std::process::ExitStatus) -> i32 { s.code().unwrap_or(1) }
+
 /// Exit code of one per-core pass: 0 pass, 1 errors, 3 cannot run, 4 stopped. AVX2 first, SSE
 /// when AVX2 cannot run here. `stop` (the caller's signal flag) ends the stressor too: it does not
 /// get a terminal's SIGINT when the search runs under ssh -T, a service or `kill`.
@@ -165,7 +169,7 @@ fn stress(seconds: u64, stop: &AtomicBool) -> i32 {
             .stdout(std::process::Stdio::null()).spawn() else { return 3 };
         loop {
             match child.try_wait() {
-                Ok(Some(s)) => return s.code().unwrap_or(3),
+                Ok(Some(s)) => return exit_code(s),
                 Ok(None) if stop.load(Ordering::SeqCst) => {
                     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };  // it stops after the chunk
                     let _ = child.wait();
@@ -288,6 +292,14 @@ mod tests {
         assert_eq!(s.clone().next("old"), Next::Test(-65.0));
         assert!(matches!(s.next("new"), Next::Done(_)));
         assert_eq!((s.failed, s.testing, s.result()), (Some(-65.0), None, -50.0));
+    }
+
+    #[test]
+    fn stressor_killed_by_signal_is_a_failure() {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(exit_code(std::process::ExitStatus::from_raw(libc::SIGSEGV)), 1);
+        assert_eq!(exit_code(std::process::ExitStatus::from_raw(3 << 8)), 3);
+        assert_eq!(exit_code(std::process::ExitStatus::from_raw(0)), 0);
     }
 
     #[test]
