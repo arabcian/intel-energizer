@@ -1,0 +1,19 @@
+[package]
+name = "intel-energizer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "GPL-3.0-or-later"
+description = "Intel undervolt, CPU stress and memory stress utilities for Linux"
+default-run = "intel-energizer"
+
+[[bin]]
+name = "intel-cpustress"
+path = "src/bin/cpustress/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde_json = "1"
+
+[features]
+fault-inject = []
