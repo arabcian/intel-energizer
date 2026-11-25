@@ -1,11 +1,27 @@
 # Intel Energizer
 
-Standalone Linux CLI tools extracted from [Centurion](https://github.com/arabcian/centurion). The package builds three binaries and requires no Centurion installation or Qt. Build on x86-64 Linux with Rust 1.89 or newer and a system linker.
+Standalone Linux Qt application and CLI tools extracted from [Centurion](https://github.com/arabcian/centurion). The Qt application includes the Intel Undervolt page, CPU Test and Memory Test panels. Each can run independently of Centurion. The command-line tools can also be built separately. Build on x86-64 Linux with Rust 1.89 or newer and a system linker.
 
 ```sh
 cargo build --release --locked
 cargo test --locked --all-targets
 ```
+
+## Desktop application
+
+Build the Rust binaries above, then build the GUI with CMake 3.20+, a C++20 compiler and the Qt 6 Widgets development package. Install with the same prefix used at configure time. The commands below use /usr/local.
+
+```sh
+cmake -S gui -B build/gui -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build/gui --parallel
+ctest --test-dir build/gui --output-on-failure
+sudo cmake --install build/gui
+sudo install -m 0755 target/release/{intel-energizer,intel-cpustress,intel-memtest} /usr/local/bin/
+sudo install -D -o root -g root -m 0755 target/release/intel-uv-helper /usr/local/libexec/intel-energizer/intel-uv-helper
+intel-energizer-gui
+```
+
+Launch the GUI as your desktop user. Intel register operations use pkexec with a polkit authentication agent. The CPU test uses intel-cpustress and the memory panel uses stressapptest or memtester. Both panels store results under the user's XDG state directory. The BIOS column on Intel reports SMBIOS Type 17 configured speed when accessible. The original AMD AOD timing interface is specific to AMD firmware. Saving a boot profile writes configuration for the CLI's boot and daemon commands. On systemd, after verifying and saving a profile, run `sudo systemctl daemon-reload` and `sudo systemctl enable --now intel-energizer-daemon.service` to apply it at startup and after resume.
 
 ## Intel undervolt
 
@@ -19,7 +35,7 @@ intel-energizer --help
 sudo /usr/local/bin/intel-energizer read
 ```
 
-The `boot` and `daemon` commands read a root-owned JSON file at `/etc/intel-energizer/intel-uv-boot.json`. It accepts either a single profile or separate `ac` and `battery` profiles. The CLI stores runtime state under `/run/intel-energizer` and persistent search state under `/var/lib/intel-energizer`. Boot startup is configured separately by the operator.
+The `boot` and `daemon` commands read a root-owned JSON file at `/etc/intel-energizer/intel-uv-boot.json`. It accepts either a single profile or separate `ac` and `battery` profiles. The CLI stores runtime state under `/run/intel-energizer` and persistent search state under `/var/lib/intel-energizer`. The desktop installation includes an optional systemd daemon unit.
 
 ## CPU stress
 
@@ -38,7 +54,7 @@ Install `stressapptest` or `memtester` through your distribution. The CLI prefer
 target/release/intel-memtest --seconds 60 --percent 25
 ```
 
-Exit codes are 0 for pass, 1 for detected errors, 2 for invalid arguments, and 3 for an incomplete test or setup error. The result comes from the test backend. Centurion’s GUI result history, BIOS timing snapshots, and live kernel-event monitoring are outside this CLI.
+Exit codes are 0 for pass, 1 for detected errors, 2 for invalid arguments, and 3 for an incomplete test or setup error. The result comes from the test backend. The GUI keeps test history, captures firmware-reported configured memory speeds when readable, and monitors machine checks when the user can read /dev/kmsg.
 
 ## License
 

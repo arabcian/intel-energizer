@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Intel Energizer
+Comment=Intel voltage controls and CPU and memory stability tests
+Exec=intel-energizer-gui
+Terminal=false
+Categories=System;Monitor;

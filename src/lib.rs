@@ -254,3 +254,5 @@ pub fn refuse_during_calibration() -> Option<serde_json::Value> {
 fn boot_id() -> String {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map(|s| s.trim().to_owned()).unwrap_or_default()
 }
+
+pub mod stream;

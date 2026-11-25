@@ -1,0 +1,17 @@
+[Unit]
+Description=Intel Energizer AC and battery profiles
+ConditionPathExists=/etc/intel-energizer/intel-uv-boot.json
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/intel-energizer daemon
+ExecReload=/bin/kill -HUP $MAINPID
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectHome=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
