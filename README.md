@@ -9,7 +9,7 @@ cargo test --locked --all-targets
 
 ## Intel undervolt
 
-`intel-energizer` provides the original Intel tuning CLI, including voltage offsets, status, power measurement, boot profiles, and automatic undervolt search. It retains Centurion’s Lenovo Legion, LOQ, and IdeaPad Gaming machine check and the Intel CPU and firmware checks. Hardware writes require root and working MSR access.
+`intel-energizer` provides the original Intel tuning CLI, including voltage offsets, status, power measurement, boot profiles, and automatic undervolt search. It identifies Intel family 6 processors independently of laptop or motherboard brand. Voltage writes require a verified model-specific domain map and firmware permission. Run `intel-energizer voltage-domains` to list mapped offsets and `intel-energizer offset-preview -50` to see the representable millivolt value without hardware access. On Arrow Lake-S/HX model 198, `apply --memss MV` and `--ngu MV` expose the memory-subsystem and fabric offsets. Hardware writes require root and working MSR access.
 
 Install the undervolt and CPU stress binaries together in a root-owned directory. Automatic search invokes the installed sibling and requires readable kernel logs.
 

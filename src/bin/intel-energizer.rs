@@ -2,7 +2,9 @@
 //! Same mechanisms as the GUI tab (intel_energizer::intel_uv).
 //!
 //!   intel-energizer read
-//!   intel-energizer apply [--core MV] [--cache MV] [--gpu MV] [--uncore MV] [--analogio MV] [--force]
+//!   intel-energizer offset-preview MV            show the representable undervolt without applying it
+//!   intel-energizer voltage-domains              list model-verified offset domains
+//!   intel-energizer apply [--core MV] [--cache MV] [--gpu MV] [--uncore MV] [--analogio MV] [--memss MV] [--ngu MV] [--force]
 //!                      [--iccmax-core A] [--iccmax-gpu A] [--iccmax-cache A]
 //!                      [--tjoffset C] [--pl1 W[/S]] [--pl2 W[/S]] [--no-mchbar] [--lock]
 //!                      [--bdprochot on|off] [--ctdp 0|1|2]
@@ -188,7 +190,23 @@ fn main() {
         return;
     }
     let Some(cmd) = args.first() else { usage() };
+    if cmd == "offset-preview" {
+        if args.len() != 2 { usage(); }
+        let mv = f(args.get(1));
+        match intel_uv::mv_to_ticks(mv) {
+            Ok(ticks) => println!("{}", json!({"requested_mv": mv, "ticks": ticks, "representable_mv": ticks as f64 / intel_uv::TICKS_PER_MV})),
+            Err(error) => { eprintln!("{error}"); std::process::exit(1); }
+        }
+        return;
+    }
     if let Err(e) = intel_energizer::machine::check() { eprintln!("intel-energizer: {e}"); std::process::exit(1); }
+    if cmd == "voltage-domains" {
+        if args.len() != 1 { usage(); }
+        let verified = intel_uv::uv_map_verified();
+        let domains: Vec<_> = intel_uv::cpu_planes().filter(|_| verified).map(|p| p.0).collect();
+        println!("{}", json!({"verified_map": verified, "domains": domains}));
+        return;
+    }
     unsafe { libc::signal(libc::SIGINT, handler(on_int)); libc::signal(libc::SIGTERM, handler(on_int)); }
     if cmd != "measure" && unsafe { libc::geteuid() } != 0 { eprintln!("intel-energizer: needs root (MSR access)"); std::process::exit(1); }
     let code = match cmd.as_str() {
@@ -262,7 +280,7 @@ fn main() {
             while let Some(a) = it.next() {
                 let key = a.trim_start_matches("--");
                 match key {
-                    "core" | "cache" | "gpu" | "uncore" | "analogio" => { volt.insert(key.into(), json!(f(it.next()))); }
+                    "core" | "cache" | "gpu" | "uncore" | "analogio" | "memss" | "ngu" => { volt.insert(key.into(), json!(f(it.next()))); }
                     k if k.starts_with("iccmax-") => { icc.insert(k[7..].into(), json!(f(it.next()))); }
                     "tjoffset" => { prof.insert("tjoffset".into(), json!(f(it.next()))); }
                     "ctdp" => { prof.insert("ctdp".into(), json!(f(it.next()))); }
