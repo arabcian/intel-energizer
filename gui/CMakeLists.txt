@@ -32,4 +32,5 @@ if(BUILD_TESTING)
 endif()
 install(FILES intel-energizer.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 configure_file(../packaging/intel-energizer-daemon.service.in intel-energizer-daemon.service @ONLY)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/intel-energizer-daemon.service DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/system)
+# systemd searches <prefix>/lib/systemd/system, never the multiarch or lib64 LIBDIR.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/intel-energizer-daemon.service DESTINATION lib/systemd/system)

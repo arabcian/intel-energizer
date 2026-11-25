@@ -37,6 +37,12 @@ sudo /usr/local/bin/intel-energizer read
 
 The `boot` and `daemon` commands read a root-owned JSON file at `/etc/intel-energizer/intel-uv-boot.json`. It accepts either a single profile or separate `ac` and `battery` profiles. The CLI stores runtime state under `/run/intel-energizer` and persistent search state under `/var/lib/intel-energizer`. The desktop installation includes an optional systemd daemon unit.
 
+If a saved boot profile makes the machine crash during startup, the daemon applies it again on every boot. To recover, add `systemd.mask=intel-energizer-daemon.service` to the kernel command line once from the boot loader. Then remove the profile before rebooting normally:
+
+```sh
+sudo rm /etc/intel-energizer/intel-uv-boot.json
+```
+
 ## CPU stress
 
 The original CPU test runs per-core or all-core loads and checks each result against a known value. Run manually as a regular user. Output is newline-delimited JSON.
