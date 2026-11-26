@@ -56,6 +56,10 @@ target/release/intel-memtest --seconds 60 --percent 25
 
 Exit codes are 0 for pass, 1 for detected errors, 2 for invalid arguments, and 3 for an incomplete test or setup error. The result comes from the test backend. The GUI keeps test history, captures firmware-reported configured memory speeds when readable, and monitors machine checks when the user can read /dev/kmsg.
 
+## Disclaimer
+
+Intel Energizer was written with the assistance of AI. It writes to CPU model-specific registers and can change voltage, power and memory settings. Incorrect values can cause system instability, crashes, data loss or hardware damage. You use this software entirely at your own risk and are solely responsible for any consequences. It is provided "as is", without warranty of any kind, as stated in the license below.
+
 ## License
 
 GPL-3.0-or-later. Derived from Centurion commit [9cb06f3](https://github.com/arabcian/centurion/commit/9cb06f30d904cd86078d506cdb5625b53c9f513d), copyright 2026 arabcian. The Intel implementation references intel-undervolt, undervolt.py, throttled, and ThrottleStop. The source comments identify applicable references.
