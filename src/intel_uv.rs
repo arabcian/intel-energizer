@@ -458,6 +458,12 @@ pub fn ensure_allow_writes() -> Option<String> {
     Some(std::fs::read_to_string(p).ok()?.trim().to_owned())
 }
 
+/// The current `msr.allow_writes` value, read only. Status/read queries use this: they must not
+/// change a kernel-wide setting (only the write paths call `ensure_allow_writes`).
+pub fn allow_writes_state() -> Option<String> {
+    std::fs::read_to_string("/sys/module/msr/parameters/allow_writes").ok().map(|s| s.trim().to_owned())
+}
+
 pub fn lockdown() -> Option<String> {
     let s = std::fs::read_to_string("/sys/kernel/security/lockdown").ok()?;
     s.split_whitespace().find(|w| w.starts_with('[')).map(|w| w.trim_matches(|c| c == '[' || c == ']').to_owned())
@@ -888,7 +894,7 @@ pub fn read_status() -> Value {
         out["error"] = json!("not an Intel CPU");
         return out;
     }
-    out["allow_writes"] = json!(ensure_allow_writes());
+    out["allow_writes"] = json!(allow_writes_state());
     let msr = match Msr::open(true) {
         Ok(m) => m,
         Err(e) => { out["ok"] = json!(false); out["error"] = json!(format!("/dev/cpu/0/msr: {}", err_str(&e))); return out; }
@@ -1091,6 +1097,66 @@ fn turbo_stock(cur: u64) -> Result<u64, String> {
     Ok(cur)
 }
 
+/// Firmware's PL1/PL2, TCC offset, BD PROCHOT and IccMax as first seen this boot, noted just before
+/// this tool first writes them. A power-source switch or a reset can then put back what a profile
+/// changed but the next one does not name. /run is cleared on reboot, like the registers.
+const STOCK_FILE: &str = "/run/intel-energizer/intel-stock.json";
+
+pub fn stock_load() -> Value {
+    crate::read_root_file(STOCK_FILE, 16 * 1024).and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .filter(Value::is_object).unwrap_or_else(|| json!({}))
+}
+
+/// Records `val` at `key` (or `key.sub`) unless this boot already has a value there: the first one
+/// seen is the firmware's.
+fn stock_note(key: &str, sub: Option<&str>, val: Value) {
+    let mut s = stock_load();
+    let slot = match sub {
+        None => &mut s[key],
+        Some(k) => { if !s[key].is_object() { s[key] = json!({}); } &mut s[key][k] }
+    };
+    if !slot.is_null() { return; }
+    *slot = val;
+    if crate::secure_dir("/run/intel-energizer").is_ok() {
+        let _ = crate::write_root_file(STOCK_FILE, s.to_string().as_bytes());
+    }
+}
+
+fn stock_note_pl(raw: u64, u: Units) {
+    let (a, b, _) = decode_pl(raw, u);
+    for (k, t) in [("pl1", a), ("pl2", b)] {
+        // A term firmware left disabled cannot be put back by writing a limit: not recorded.
+        if t.enabled { stock_note(k, None, json!({"watts": t.watts, "seconds": t.seconds, "clamp": t.clamp})); }
+    }
+}
+
+/// The fields of `stock` as a profile that puts them back. `wanted` = only the fields that profile
+/// sets (a source switch); None = everything recorded (reset). Never touches a power limit that
+/// `wanted` locked: that one cannot be written again before reset.
+pub fn stock_profile(stock: &Value, wanted: Option<&Profile>) -> Profile {
+    let mut p = Profile::default();
+    let want = |f: fn(&Profile) -> bool| wanted.map_or(true, f);
+    let pl = |k: &str| -> Option<PlReq> {
+        let t = &stock[k];
+        Some(PlReq { watts: t["watts"].as_f64()?, seconds: Some(t["seconds"].as_f64()?), clamp: Some(t["clamp"].as_bool()?) })
+    };
+    if !wanted.is_some_and(|w| w.lock_power) {
+        if want(|w| w.pl1.is_some()) { p.pl1 = pl("pl1"); }
+        if want(|w| w.pl2.is_some()) { p.pl2 = pl("pl2"); }
+    }
+    if want(|w| w.tjoffset.is_some()) { p.tjoffset = stock["tcc"].as_u64(); }
+    if want(|w| w.disable_bdprochot.is_some()) { p.disable_bdprochot = stock["bdprochot_disabled"].as_bool(); }
+    for &k in ICC_PLANES {
+        let (Some(a), Some(idx)) = (stock["icc"][k].as_f64(), plane_index(k)) else { continue };
+        if wanted.map_or(true, |w| w.iccmax.iter().any(|i| i.0 == k)) { p.iccmax.push((k, idx, a)); }
+    }
+    p
+}
+
+fn pkg_power_limit_locked() -> bool {
+    Msr::open(false).ok().and_then(|m| m.read(MSR_PKG_POWER_LIMIT).ok()).is_some_and(|v| v >> 63 == 1)
+}
+
 // ── sysfs / powercap writes (kernel-validated) ─────────────────────────────
 
 const RAPL_PKG: &str = "/sys/class/powercap/intel-rapl:0";
@@ -1271,7 +1337,10 @@ fn apply_ex(p: &Profile, rollback: bool) -> Value {
             Ok(format!("{:.2} A", back as f64 / 4.0))
         })();
         // `prior` is also set when the build closure vetoed: only keep it if a write happened.
-        if let (Some(c), true) = (prior, r.is_ok() || !r.as_ref().err().is_some_and(|e| e.contains("nothing written"))) { undo.push((format!("iccmax.{k}"), Undo::Icc(idx, c))); }
+        if let (Some(c), true) = (prior, r.is_ok() || !r.as_ref().err().is_some_and(|e| e.contains("nothing written"))) {
+            stock_note("icc", Some(k), json!((c & ICC_MAX_FIELD) as f64 / 4.0));
+            undo.push((format!("iccmax.{k}"), Undo::Icc(idx, c)));
+        }
         all &= step(&mut results, format!("iccmax.{k}"), r);
     }
 
@@ -1293,6 +1362,7 @@ fn apply_ex(p: &Profile, rollback: bool) -> Value {
             // throttled keeps the trip point ≥ 40 °C.
             if tjmax > 0 && tjmax.saturating_sub(off) < 40 { return Err(format!("offset {off} would put the target below 40 °C (TjMax {tjmax})")); }
             let new = (cur & !(0x3Fu64 << 24)) | (off << 24);
+            stock_note("tcc", None, json!((cur >> 24) & 0x3F));
             prior = Some(cur);
             msr.write(MSR_TEMPERATURE_TARGET, new).map_err(|e| err_str(&e))?;
             let back = (msr.read(MSR_TEMPERATURE_TARGET).map_err(|e| err_str(&e))? >> 24) & 0x3F;
@@ -1309,6 +1379,7 @@ fn apply_ex(p: &Profile, rollback: bool) -> Value {
             let units = decode_units(msr.read(MSR_RAPL_POWER_UNIT).map_err(|e| err_str(&e))?);
             let cur = msr.read(MSR_PKG_POWER_LIMIT).map_err(|e| err_str(&e))?;
             if cur >> 63 == 1 { return Err("MSR_PKG_POWER_LIMIT is locked by firmware until reset".into()); }
+            stock_note_pl(cur, units);
             let mut v = cur;
             if let Some(t) = &p.pl1 { v = encode_pl_term(v, false, t.watts, t.seconds, units)?; }
             if let Some(t) = &p.pl2 { v = encode_pl_term(v, true, t.watts, t.seconds, units)?; }
@@ -1352,6 +1423,7 @@ fn apply_ex(p: &Profile, rollback: bool) -> Value {
         let r = (|| {
             let cur = msr.read(MSR_POWER_CTL).map_err(|e| err_str(&e))?;
             let new = if dis { cur & !1 } else { cur | 1 };
+            stock_note("bdprochot_disabled", None, json!(cur & 1 == 0));
             prior = Some(cur);
             msr.write(MSR_POWER_CTL, new).map_err(|e| err_str(&e))?;
             let back = msr.read(MSR_POWER_CTL).map_err(|e| err_str(&e))? & 1;
@@ -1726,10 +1798,18 @@ pub fn restore_pl(raw: u64, caps: (Option<f64>, Option<f64>)) -> Result<(), Stri
 }
 
 /// Stock voltage: every plane this CPU has back to 0 mV (the Arrow Lake-only planes are not
-/// written on other CPUs: those OC-mailbox domains do not exist there). IccMax, TCC and power
-/// limits have no knowable "stock" (firmware programs them), so reset leaves them.
+/// written on other CPUs: those OC-mailbox domains do not exist there). IccMax, TCC, BD PROCHOT and
+/// the power limits are firmware-programmed: they go back to the value this tool first saw this boot.
 pub fn reset_profile() -> Profile {
-    Profile { voltage: cpu_planes().map(|&(k, i, _)| (k, i, 0.0)).collect(), ..Default::default() }
+    let mut p = Profile { voltage: cpu_planes().map(|&(k, i, _)| (k, i, 0.0)).collect(), ..Default::default() };
+    // What this boot's profiles changed of the firmware's own PL1/PL2, TCC, BD PROCHOT and IccMax
+    // (recorded before the first write) goes back too; a locked power limit is left out, it cannot be written.
+    let stock = stock_profile(&stock_load(), None);
+    if !pkg_power_limit_locked() { p.pl1 = stock.pl1; p.pl2 = stock.pl2; }
+    p.tjoffset = stock.tjoffset;
+    p.disable_bdprochot = stock.disable_bdprochot;
+    p.iccmax = stock.iccmax;
+    p
 }
 
 /// Undervolt-protection probe (CVE-2019-11157 / UVP): the OC Lock bit does not

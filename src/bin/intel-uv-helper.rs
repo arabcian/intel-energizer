@@ -111,7 +111,9 @@ fn run() -> Value {
             Err(e) => e,
         },
         Some("reset") => {
-            let mut out = intel_uv::apply_atomic(&intel_uv::reset_profile());
+            // Not atomic: a reset puts back as much as it can; one field that cannot (a locked limit)
+            // must not undo the voltage reset of the others.
+            let mut out = intel_uv::apply(&intel_uv::reset_profile());
             if out["ok"] == true { intel_energizer::ocjournal::record("cpu_uv", "reset"); }
             if hold && out["ok"] == true {
                 if let Err(e) = write_hold(None) { out["hold_error"] = json!(e); out["ok"] = json!(false); }
