@@ -1835,12 +1835,13 @@ pub fn probe_uv_lock() -> Value {
         Ok(r) => r,
         Err(e) => return json!({"ok": false, "error": format!("mailbox read: {}", err_str(&e)), "oc_lock": oc_lock}),
     };
-    let raw = (((cur & 0xFFFF_FFFF) >> 21) & 0x7FF) as i64;
-    let ticks = if raw >= 0x400 { raw - 0x800 } else { raw };
-    let test = if ticks < 0 { ticks + 1 } else if ticks > 0 { ticks - 1 } else { -1 };
+    let test = |c: u64| { let t = offset_ticks(c); if t < 0 { t + 1 } else if t > 0 { t - 1 } else { -1 } };
     // Ratio/target/mode bits (20:0) are carried over from the read in both writes.
-    let cmd = uv_write_cmd_keep(plane, test, cur);
-    let back = msr.mailbox_rmw(uv_read_cmd(plane), |c| Some(uv_write_cmd_keep(plane, test, c)));
+    let back = msr.mailbox_rmw(uv_read_cmd(plane), |c| Some(uv_write_cmd_keep(plane, test(c), c)));
+    // The value to restore is the one read under the probe write's own lock: another agent (the
+    // daemon) may have written between the status read above and that transaction.
+    let (cur, cmd) = match &back { Ok(Rmw::Done { cur: c, cmd, .. }) => (*c, *cmd), _ => (cur, uv_write_cmd_keep(plane, test(cur), cur)) };
+    let ticks = offset_ticks(cur);
     // Always restore, whatever happened.
     let restore = msr.mailbox_rmw(uv_read_cmd(plane), |c| Some(uv_write_cmd_keep(plane, ticks, c)));
     let restored = matches!(restore, Ok(Rmw::Done { cmd: rc, back: rb, .. }) if mb_status(rb) == 0 && rb & 0xFFFF_FFFF == rc & 0xFFFF_FFFF);

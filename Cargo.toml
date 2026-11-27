@@ -15,5 +15,10 @@ path = "src/bin/cpustress/main.rs"
 libc = "0.2"
 serde_json = "1"
 
+# The stress-kernel tests run full workloads: unoptimised they take over ten minutes.
+# Optimisation only; debug assertions and overflow checks stay on.
+[profile.test]
+opt-level = 2
+
 [features]
 fault-inject = []
